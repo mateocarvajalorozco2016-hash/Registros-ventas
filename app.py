@@ -277,14 +277,16 @@ class App(tk.Tk):
                  font=("Segoe UI", 9)).pack(side="left", padx=14, pady=(7, 0))
 
         search = tk.Frame(left, bg="white")
-        search.pack(fill="x", padx=18, pady=7)
+        search.pack(fill="x", padx=18, pady=(5, 6))
         self.query = tk.StringVar()
-        entry = tk.Entry(search, textvariable=self.query, font=("Segoe UI", 12),
-                         relief="solid", bd=1)
-        entry.pack(side="left", fill="x", expand=True, ipady=9)
+        search_inner = tk.Frame(search, bg="white")
+        search_inner.pack(anchor="w")
+        entry = tk.Entry(search_inner, textvariable=self.query, font=("Segoe UI", 11),
+                         relief="solid", bd=1, width=38)
+        entry.pack(side="left", ipady=5)
         entry.bind("<KeyRelease>", lambda _e: self.render_products())
-        self.make_button(search, "🔎 Buscar", self.render_products, bg="#e9edf1", fg="#252a31",
-                         activebackground="#dfe4e9").pack(side="left", padx=(7, 0), ipady=7, ipadx=8)
+        self.make_button(search_inner, "🔎 Buscar", self.render_products, bg="#e9edf1", fg="#252a31",
+                         activebackground="#dfe4e9", font=("Segoe UI", 9, "bold")).pack(side="left", padx=(6, 0), ipady=5, ipadx=7)
 
         self.categories_bar = tk.Frame(left, bg="white")
         self.categories_bar.pack(fill="x", padx=14, pady=(0, 4))
@@ -293,24 +295,26 @@ class App(tk.Tk):
 
         # Dinero: abajo y fuera del panel derecho.
         money_box = tk.Frame(left, bg="#f8fafb", highlightthickness=1, highlightbackground="#e1e5e9")
-        money_box.pack(fill="x", padx=14, pady=(7, 12))
+        money_box.pack(fill="x", padx=14, pady=(5, 10))
         tk.Label(money_box, text="DINERO RECIBIDO", bg="#f8fafb", fg="#252a31",
-                 font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=12, pady=(9, 3))
+                 font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=12, pady=(7, 2))
         self.cash_buttons_frame = tk.Frame(money_box, bg="#f8fafb")
-        self.cash_buttons_frame.pack(fill="x", padx=10, pady=(0, 6))
+        self.cash_buttons_frame.pack(fill="x", padx=9, pady=(0, 4))
         custom = tk.Frame(money_box, bg="#f8fafb")
-        custom.pack(fill="x", padx=10, pady=(0, 10))
+        custom.pack(fill="x", padx=9, pady=(0, 8))
         tk.Label(custom, text="Valor recibido", bg="#f8fafb", fg=self.MUTED,
                  font=("Segoe UI", 9, "bold")).pack(side="left")
         self.custom_received_var = tk.StringVar(value="0")
         self.custom_received_entry = tk.Entry(custom, textvariable=self.custom_received_var,
                                               font=("Segoe UI", 12, "bold"), justify="right",
-                                              relief="solid", bd=1, width=18)
-        self.custom_received_entry.pack(side="left", padx=10, ipady=5)
+                                              relief="solid", bd=1, width=14)
+        self.custom_received_entry.pack(side="left", padx=8, ipady=3)
         self.custom_received_entry.bind("<KeyRelease>", self.on_received_typed)
         self.custom_received_entry.bind("<FocusOut>", self.on_received_typed)
+        self.custom_received_entry.bind("<FocusIn>", self.on_received_focus)
+        self.custom_received_entry.bind("<<Paste>>", self.on_received_paste)
         self.make_button(custom, "Usar valor", self.use_custom_received,
-                         bg="#e9edf1", fg="#252a31").pack(side="left", ipady=5, ipadx=8)
+                         bg="#e9edf1", fg="#252a31", font=("Segoe UI", 9, "bold")).pack(side="left", ipady=3, ipadx=7)
         self.render_cash_buttons()
 
         tk.Label(right, text="VENTA ACTUAL", bg="white", fg="#17191d",
@@ -423,20 +427,20 @@ class App(tk.Tk):
         else:
             start = 0
         for i, (pid, name, category, price, image) in enumerate(rows):
-            card = tk.Frame(self.products_area, bg="#eef2f5", width=190, height=190,
+            card = tk.Frame(self.products_area, bg="#eef2f5", width=178, height=174,
                             highlightthickness=1, highlightbackground="#e0e4e8", cursor="hand2")
-            card.grid(row=start + i // 4, column=i % 4, padx=6, pady=6, sticky="nsew")
+            card.grid(row=start + i // 4, column=i % 4, padx=8, pady=8, sticky="nsew")
             card.grid_propagate(False)
-            photo = self.load_photo(image, 150, 105, f"product-{pid}")
+            photo = self.load_photo(image, 136, 88, f"product-{pid}")
             if photo:
                 visual = tk.Label(card, image=photo, bg="#eef2f5")
                 visual.image = photo
             else:
                 visual = tk.Label(card, text="🖼\nSin imagen", bg="#eef2f5", fg="#8a939d",
                                   font=("Segoe UI", 10))
-            visual.pack(pady=(8, 3))
+            visual.pack(pady=(7, 3))
             tk.Label(card, text=name, bg="#eef2f5", fg="#20252b", font=("Segoe UI", 10, "bold"),
-                     wraplength=175).pack(pady=(0, 1))
+                     wraplength=162).pack(pady=(0, 1))
             tk.Label(card, text=money(price), bg="#eef2f5", fg="#17191d",
                      font=("Segoe UI", 11, "bold")).pack()
             for widget in (card, visual):
@@ -473,7 +477,14 @@ class App(tk.Tk):
         selected = self.cart_tree.selection()
         if not selected:
             return
-        pid = int(self.cart_tree.item(selected[0], "tags")[0])
+        iid = selected[0]
+        try:
+            pid = int(iid)
+        except ValueError:
+            tags = self.cart_tree.item(iid, "tags")
+            if not tags:
+                return
+            pid = int(tags[0])
         self.cart.pop(pid, None)
         self.refresh_cart()
 
@@ -486,7 +497,7 @@ class App(tk.Tk):
         for pid, (name, price, quantity) in self.cart.items():
             subtotal = price * quantity
             total += subtotal
-            self.cart_tree.insert("", "end", values=(f"{name}  ×{quantity}", money(subtotal)), tags=(str(pid),))
+            self.cart_tree.insert("", "end", iid=str(pid), values=(f"{name}  ×{quantity}", money(subtotal)), tags=(str(pid),))
         self.total_label.config(text=f"TOTAL  {money(total)}")
         self.update_payment_display()
 
@@ -499,18 +510,18 @@ class App(tk.Tk):
                 default = DEFAULT_MONEY / f"{denomination}.png"
                 if default.exists():
                     relative = str(default)
-            photo = self.load_photo(relative, 132, 48, f"money-{denomination}")
+            photo = self.load_photo(relative, 108, 40, f"money-{denomination}")
             btn = self.make_button(
                 self.cash_buttons_frame,
                 money(denomination) if not photo else "",
                 lambda value=denomination: self.add_received(value),
                 bg="#edf1f4", fg="#252a31", activebackground="#e0e5e9",
-                font=("Segoe UI", 9, "bold")
+                font=("Segoe UI", 8, "bold")
             )
             if photo:
                 btn.configure(image=photo, compound="center")
                 btn.image = photo
-            btn.grid(row=0, column=index, sticky="ew", padx=2, pady=2, ipady=3)
+            btn.grid(row=0, column=index, sticky="ew", padx=2, pady=2, ipady=2)
             self.cash_buttons_frame.grid_columnconfigure(index, weight=1)
 
     def add_received(self, amount):
@@ -521,14 +532,45 @@ class App(tk.Tk):
         self.custom_received_var.set(format_number(self.received))
         self.update_payment_display()
 
-    def on_received_typed(self, _event=None):
-        raw = self.custom_received_var.get()
+    def on_received_focus(self, _event=None):
+        # Facilita reemplazar el 0 inicial escribiendo o pegando un nuevo valor.
+        if self.custom_received_entry.get() == "0":
+            self.custom_received_entry.selection_range(0, tk.END)
+
+    def _format_entry_preserve_cursor(self):
+        """Format a money entry without making digits jump while typing/pasting."""
+        entry = self.custom_received_entry
+        raw = entry.get()
+        try:
+            cursor = entry.index(tk.INSERT)
+        except tk.TclError:
+            cursor = len(raw)
+        digits_before = sum(ch.isdigit() for ch in raw[:cursor])
         value = parse_money(raw)
         formatted = format_number(value)
         if raw != formatted:
-            self.custom_received_var.set(formatted)
+            entry.delete(0, tk.END)
+            entry.insert(0, formatted)
+            # Put the cursor after the same number of numeric digits as before.
+            seen = 0
+            new_cursor = len(formatted)
+            for i, ch in enumerate(formatted):
+                if ch.isdigit():
+                    seen += 1
+                    if seen == digits_before:
+                        new_cursor = i + 1
+                        break
+            if digits_before == 0:
+                new_cursor = 0
+            entry.icursor(new_cursor)
         self.received = value
         self.update_payment_display()
+
+    def on_received_typed(self, _event=None):
+        self._format_entry_preserve_cursor()
+
+    def on_received_paste(self, _event=None):
+        self.after_idle(self._format_entry_preserve_cursor)
 
     def use_custom_received(self):
         self.received = parse_money(self.custom_received_var.get())

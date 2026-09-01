@@ -1,39 +1,16 @@
-REGISTRO DE VENTAS - VERSION CORREGIDA
+REGISTRO DE VENTAS V5 - versión corregida
 
-Aplicación de escritorio POS sencilla para Windows. NO incluye inventario ni control de existencias.
+Esta versión conserva la aplicación de Registro de Ventas y corrige:
+- distribución más espaciosa de la pantalla de venta;
+- buscador y campo de valor recibido más compactos;
+- formato de dinero sin mover las cifras ni el cursor al escribir o pegar;
+- eliminación fiable del elemento seleccionado de la venta actual.
 
-CARACTERÍSTICAS
-- Productos con nombre, precio, categoría e imagen opcional.
-- Se permiten nombres de productos repetidos.
-- Categorías creadas por el usuario; no se crean categorías de ejemplo.
-- Imágenes de productos copiadas a datos/productos/ y persistentes.
-- Vista previa real de imágenes al seleccionarlas.
-- Búsqueda tolerante a errores de escritura (fuzzy search).
-- Menú lateral dentro de la misma ventana, con animación de entrada/salida.
-- Venta actual en el panel derecho.
-- Botones de billetes abajo, en la zona central/izquierda.
-- Valor recibido personalizado independiente de los botones de billetes.
-- Formato automático de miles con puntos: 35000 -> 35.000.
-- Cambio calculado automáticamente.
-- Ventas guardadas en SQLite.
-- Ventas de hoy, semana actual y mes actual filtradas por período.
-- Configuración del nombre del negocio.
-- Imágenes personalizadas de billetes guardadas en datos/dinero/ y configuracion.json.
-- No se agregan productos de ejemplo.
+La aplicación NO usa inventario ni controla existencias.
+Los datos del usuario se guardan en la carpeta datos/ junto al ejecutable cuando se ejecuta como EXE.
 
-PERSISTENCIA
-Los datos se guardan junto al programa:
-  datos/ventas.db
-  datos/productos/
-  datos/dinero/
-  datos/configuracion.json
-
-IMPORTANTE PARA PyInstaller --onefile
-La aplicación detecta si está ejecutándose como EXE y usa la carpeta donde está RegistroVentas.exe para los datos.
-Los recursos predeterminados de billetes se incluyen en el EXE, pero los datos creados por el usuario nunca se guardan en la carpeta temporal de PyInstaller.
-
-GITHUB ACTIONS
-El workflow .github/workflows/crear-exe.yml instala Python, dependencias y PyInstaller, crea RegistroVentas.exe y lo publica como Artifact.
-
-NO INSTALAR EN EL PC DEL USUARIO
-El EXE no necesita Python, Node.js, Apache ni XAMPP.
+Para crear el EXE con GitHub Actions:
+1. Sube el contenido de esta carpeta al repositorio.
+2. Verifica que .github/workflows/crear-exe.yml exista.
+3. Ve a Actions y ejecuta "Crear EXE de Windows".
+4. Descarga el Artifact "RegistroVentas-Windows".
