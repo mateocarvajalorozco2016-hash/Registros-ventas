@@ -1,16 +1,68 @@
-REGISTRO DE VENTAS V5 - versión corregida
+REGISTRO DE VENTAS V8 - ajustes de interfaz y dinero
 
-Esta versión conserva la aplicación de Registro de Ventas y corrige:
-- distribución más espaciosa de la pantalla de venta;
-- buscador y campo de valor recibido más compactos;
-- formato de dinero sin mover las cifras ni el cursor al escribir o pegar;
-- eliminación fiable del elemento seleccionado de la venta actual.
+Esta versión trabaja sobre la V5 y conserva SQLite, imágenes persistentes, ventas y búsqueda tolerante a errores.
 
-La aplicación NO usa inventario ni controla existencias.
-Los datos del usuario se guardan en la carpeta datos/ junto al ejecutable cuando se ejecuta como EXE.
+Cambios principales:
+- pantalla completa al iniciar; F11 o Esc alternan pantalla completa;
+- buscador y “Nueva venta” en la misma fila, arriba, para aprovechar mejor el espacio;
+- botones de billetes compactos, sin columnas estiradas ni grandes huecos;
+- $100.000 incluido y accesible en Configuración;
+- el botón de billetes no tiene controles extra en la pantalla de venta;
+- Nueva venta a la izquierda y buscador arriba a la derecha, en la misma fila;
+- se eliminó el texto auxiliar que ocupaba espacio;
+- tarjetas de productos un poco más grandes y separadas;
+- clic derecho sobre un producto para eliminarlo con confirmación;
+- vista previa de imágenes de producto más grande y mostrando la imagen completa;
+- configuración de billetes reorganizada para que $100.000 también sea accesible;
+- se quitó el botón inútil “Usar valor”; al escribir o pegar el valor recibido se aplica directamente;
+- entrada de dinero sin reformateo automático: se puede escribir o pegar directamente sin que el cursor mueva los dígitos;
+- total y “Eliminar seleccionado” quedan juntos;
+- botón REGISTRAR VENTA más grande;
+- ventas de hoy/semana/mes usan límites de inicio y fin del período, sin mezclar fechas;
+- no se agregó inventario ni control de existencias.
 
-Para crear el EXE con GitHub Actions:
-1. Sube el contenido de esta carpeta al repositorio.
-2. Verifica que .github/workflows/crear-exe.yml exista.
-3. Ve a Actions y ejecuta "Crear EXE de Windows".
-4. Descarga el Artifact "RegistroVentas-Windows".
+DATOS
+Los datos creados por el usuario se guardan junto al EXE, en datos/:
+- ventas.db
+- productos/
+- dinero/
+- configuracion.json
+
+Con PyInstaller --onefile, los recursos predeterminados se leen desde la copia incluida en el EXE, pero los datos del usuario siguen guardándose junto al EXE y no en la carpeta temporal de PyInstaller.
+
+GITHUB ACTIONS
+1. Sube el contenido de esta carpeta a un repositorio de GitHub.
+2. Asegúrate de conservar .github/workflows/crear-exe.yml.
+3. En GitHub entra a Actions.
+4. Selecciona “Crear EXE de Windows”.
+5. Pulsa “Run workflow” si quieres generarlo manualmente.
+6. Al terminar, abre la ejecución completada y busca Artifacts.
+7. Descarga “RegistroVentas-Windows”.
+
+REQUISITOS DEL PROYECTO
+- Python solo es necesario para desarrollar o ejecutar desde el código fuente.
+- El usuario final del EXE no necesita Python, Node.js, Apache ni XAMPP.
+
+
+AJUSTES DE ESTA VERSIÓN
+- Hasta 6 productos por fila en la pantalla de venta.
+- Botón REGISTRAR VENTA ligeramente más pequeño.
+- "Eliminar seleccionado" queda arriba, junto a "VENTA ACTUAL".
+- El TOTAL queda separado y alineado debajo de la lista de venta.
+- Ventas de hoy/semana/mes muestran únicamente Fecha, Producto y Precio.
+
+AJUSTE V9
+- Botones de eliminar/cancelar en gris para que resalten sin usar rojo.
+- Billetes y monedas de "DINERO RECIBIDO" ampliados para facilitar su uso.
+
+AJUSTE V10
+- Casilla "Descuento" al lado de "Valor recibido".
+- Al marcarla aparece "Precio final" para escribir directamente el precio que se le dejó al cliente.
+- El programa calcula automáticamente el descuento y el cambio.
+- El descuento queda guardado en la venta.
+- Las ventas antiguas siguen funcionando gracias a una migración automática de la base de datos.
+
+AJUSTE V11
+- El historial guarda el precio final cobrado.
+- Si una venta tiene descuento, el descuento completo se aplica al último producto del pedido.
+- Ejemplo: Ventilador $200.000 + Gorra $55.000, total final $250.000 -> Ventilador $200.000 y Gorra $50.000.

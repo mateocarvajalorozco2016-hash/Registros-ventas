@@ -72,8 +72,13 @@ def database():
         fecha TEXT NOT NULL,
         total INTEGER NOT NULL,
         recibido INTEGER NOT NULL,
-        cambio INTEGER NOT NULL
+        cambio INTEGER NOT NULL,
+        descuento INTEGER NOT NULL DEFAULT 0
     )""")
+    # Compatibilidad con bases de datos creadas en versiones anteriores.
+    columnas_ventas = [row[1] for row in c.execute("PRAGMA table_info(ventas)").fetchall()]
+    if "descuento" not in columnas_ventas:
+        c.execute("ALTER TABLE ventas ADD COLUMN descuento INTEGER NOT NULL DEFAULT 0")
     c.execute("""CREATE TABLE IF NOT EXISTS detalle(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         venta_id INTEGER NOT NULL,
@@ -130,9 +135,10 @@ def safe_remove_image(relative_path):
 class App(tk.Tk):
     BG = "#f3f5f8"
     CARD = "#ffffff"
-    DARK = "#17191d"
+    DARK = "#20242a"
     MUTED = "#667085"
-    GREEN = "#27a866"
+    GREEN = "#16a36a"
+    ACCENT = "#e9eef3"
 
     def __init__(self):
         super().__init__()
@@ -140,11 +146,18 @@ class App(tk.Tk):
         self.geometry("1280x820")
         self.minsize(1050, 680)
         self.configure(bg=self.BG)
+        self.attributes("-fullscreen", True)
+        # Reafirma el modo pantalla completa después de que Windows haya creado la ventana.
+        self.after(120, lambda: self.attributes("-fullscreen", True))
+        self.bind("<F11>", lambda _e: self.toggle_fullscreen())
+        self.bind("<Escape>", lambda _e: self.toggle_fullscreen())
         self.protocol("WM_DELETE_WINDOW", self.destroy)
 
         self.config_data = load_config()
         self.cart = {}  # product_id -> [name, price, quantity]
         self.received = 0
+        self.discount_enabled = False
+        self.final_total = 0
         self.category = "Todos"
         self.image_cache = {}
         self.money_paths = {int(k): v for k, v in self.config_data.get("dinero", {}).items() if str(k).isdigit()}
@@ -159,6 +172,10 @@ class App(tk.Tk):
         self.show_sale()
 
     # --------------------------- UI base ------------------------------------
+    def toggle_fullscreen(self):
+        current = bool(self.attributes("-fullscreen"))
+        self.attributes("-fullscreen", not current)
+
     def build_header(self):
         header = tk.Frame(self, bg=self.DARK, height=68)
         header.pack(fill="x")
@@ -263,92 +280,128 @@ class App(tk.Tk):
     def show_sale(self):
         self.current_view = "sale"
         self.clear_body()
+        self.body.configure(padx=0, pady=0)
+
         left = tk.Frame(self.body, bg=self.CARD)
-        left.pack(side="left", fill="both", expand=True, padx=(0, 9))
-        right = tk.Frame(self.body, bg=self.CARD, width=355)
+        left.pack(side="left", fill="both", expand=True, padx=(0, 8))
+        right = tk.Frame(self.body, bg=self.CARD, width=370)
         right.pack(side="right", fill="y")
         right.pack_propagate(False)
 
-        top = tk.Frame(left, bg="white")
-        top.pack(fill="x", padx=18, pady=(16, 4))
-        tk.Label(top, text="Nueva venta", bg="white", fg="#17191d",
-                 font=("Segoe UI", 21, "bold")).pack(side="left")
-        tk.Label(top, text="Selecciona productos para agregarlos", bg="white", fg=self.MUTED,
-                 font=("Segoe UI", 9)).pack(side="left", padx=14, pady=(7, 0))
-
-        search = tk.Frame(left, bg="white")
-        search.pack(fill="x", padx=18, pady=(5, 6))
+        # Encabezado: todo queda pegado arriba para aprovechar el espacio.
+        # Nueva venta a la izquierda y buscador a la derecha, en la misma fila.
+        top = tk.Frame(left, bg="white", height=58)
+        top.pack(fill="x", padx=14, pady=(2, 2))
+        top.pack_propagate(False)
+        top.grid_columnconfigure(1, weight=1)
+        title_label = tk.Label(top, text="Nueva venta", bg="white", fg="#17191d",
+                               font=("Segoe UI", 22, "bold"))
+        title_label.grid(row=0, column=0, sticky="w", pady=4)
+        search = tk.Frame(top, bg="white")
+        search.grid(row=0, column=1, sticky="ew", padx=(28, 0), pady=4)
+        search.grid_columnconfigure(0, weight=1)
         self.query = tk.StringVar()
-        search_inner = tk.Frame(search, bg="white")
-        search_inner.pack(anchor="w")
-        entry = tk.Entry(search_inner, textvariable=self.query, font=("Segoe UI", 11),
-                         relief="solid", bd=1, width=38)
-        entry.pack(side="left", ipady=5)
+        entry = tk.Entry(search, textvariable=self.query, font=("Segoe UI", 12),
+                         relief="solid", bd=1)
+        entry.grid(row=0, column=0, sticky="ew", ipady=7)
         entry.bind("<KeyRelease>", lambda _e: self.render_products())
-        self.make_button(search_inner, "🔎 Buscar", self.render_products, bg="#e9edf1", fg="#252a31",
-                         activebackground="#dfe4e9", font=("Segoe UI", 9, "bold")).pack(side="left", padx=(6, 0), ipady=5, ipadx=7)
+        self.make_button(search, "🔎", self.render_products, bg="#eef1f4", fg="#252a31",
+                         activebackground="#e1e5e9", font=("Segoe UI", 11, "bold"),
+                         width=3).grid(row=0, column=1, padx=(6, 0), ipady=5)
 
         self.categories_bar = tk.Frame(left, bg="white")
-        self.categories_bar.pack(fill="x", padx=14, pady=(0, 4))
+        self.categories_bar.pack(fill="x", padx=12, pady=(0, 3))
         self.products_area = tk.Frame(left, bg="white")
-        self.products_area.pack(fill="both", expand=True, padx=12)
+        self.products_area.pack(fill="both", expand=True, padx=8, pady=(0, 2))
 
-        # Dinero: abajo y fuera del panel derecho.
-        money_box = tk.Frame(left, bg="#f8fafb", highlightthickness=1, highlightbackground="#e1e5e9")
-        money_box.pack(fill="x", padx=14, pady=(5, 10))
+        # Dinero recibido: siempre abajo, fuera del panel derecho.
+        money_box = tk.Frame(left, bg="#f8fafb", highlightthickness=1, highlightbackground="#dde2e7")
+        money_box.pack(fill="x", padx=12, pady=(2, 7))
         tk.Label(money_box, text="DINERO RECIBIDO", bg="#f8fafb", fg="#252a31",
-                 font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=12, pady=(7, 2))
+                 font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=12, pady=(5, 1))
         self.cash_buttons_frame = tk.Frame(money_box, bg="#f8fafb")
-        self.cash_buttons_frame.pack(fill="x", padx=9, pady=(0, 4))
+        self.cash_buttons_frame.pack(fill="x", padx=8, pady=(0, 3))
         custom = tk.Frame(money_box, bg="#f8fafb")
-        custom.pack(fill="x", padx=9, pady=(0, 8))
+        custom.pack(fill="x", padx=10, pady=(0, 6))
         tk.Label(custom, text="Valor recibido", bg="#f8fafb", fg=self.MUTED,
                  font=("Segoe UI", 9, "bold")).pack(side="left")
         self.custom_received_var = tk.StringVar(value="0")
         self.custom_received_entry = tk.Entry(custom, textvariable=self.custom_received_var,
                                               font=("Segoe UI", 12, "bold"), justify="right",
-                                              relief="solid", bd=1, width=14)
-        self.custom_received_entry.pack(side="left", padx=8, ipady=3)
+                                              relief="solid", bd=1, width=16)
+        self.custom_received_entry.pack(side="left", padx=8, ipady=4)
         self.custom_received_entry.bind("<KeyRelease>", self.on_received_typed)
         self.custom_received_entry.bind("<FocusOut>", self.on_received_typed)
         self.custom_received_entry.bind("<FocusIn>", self.on_received_focus)
         self.custom_received_entry.bind("<<Paste>>", self.on_received_paste)
-        self.make_button(custom, "Usar valor", self.use_custom_received,
-                         bg="#e9edf1", fg="#252a31", font=("Segoe UI", 9, "bold")).pack(side="left", ipady=3, ipadx=7)
+
+        self.discount_var = tk.BooleanVar(value=False)
+        self.discount_check = tk.Checkbutton(
+            custom, text="Descuento", variable=self.discount_var,
+            command=self.toggle_discount, bg="#f8fafb", fg="#252a31",
+            activebackground="#f8fafb", selectcolor="#ffffff",
+            font=("Segoe UI", 9, "bold")
+        )
+        self.discount_check.pack(side="left", padx=(14, 4))
+
+        self.final_price_frame = tk.Frame(money_box, bg="#f8fafb")
+        self.final_price_label = tk.Label(
+            self.final_price_frame, text="Precio final", bg="#f8fafb",
+            fg=self.MUTED, font=("Segoe UI", 9, "bold")
+        )
+        self.final_price_label.pack(side="left")
+        self.final_price_var = tk.StringVar(value="0")
+        self.final_price_entry = tk.Entry(
+            self.final_price_frame, textvariable=self.final_price_var,
+            font=("Segoe UI", 12, "bold"), justify="right",
+            relief="solid", bd=1, width=16
+        )
+        self.final_price_entry.pack(side="left", padx=8, ipady=4)
+        self.final_price_entry.bind("<KeyRelease>", self.on_final_price_typed)
+        self.final_price_entry.bind("<FocusOut>", self.on_final_price_typed)
+        # Se mantiene oculto hasta marcar "Descuento".
         self.render_cash_buttons()
 
-        tk.Label(right, text="VENTA ACTUAL", bg="white", fg="#17191d",
-                 font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=16, pady=(16, 10))
+        # Panel derecho: encabezado con VENTA ACTUAL y eliminar al lado.
+        current_head = tk.Frame(right, bg="white")
+        current_head.pack(fill="x", padx=14, pady=(10, 6))
+        tk.Label(current_head, text="VENTA ACTUAL", bg="white", fg="#17191d",
+                 font=("Segoe UI", 12, "bold")).pack(side="left")
+        self.make_button(current_head, "Eliminar seleccionado", self.remove_selected,
+                         bg="#68717a", fg="white", activebackground="#4f575e",
+                         font=("Segoe UI", 8, "bold")).pack(side="right", ipady=3, ipadx=5)
+
         tree_frame = tk.Frame(right, bg="white")
-        tree_frame.pack(fill="both", expand=True, padx=10)
-        self.cart_tree = ttk.Treeview(tree_frame, columns=("producto", "precio"), show="headings", height=12)
+        tree_frame.pack(fill="both", expand=True, padx=9)
+        self.cart_tree = ttk.Treeview(tree_frame, columns=("producto", "precio"), show="headings")
         self.cart_tree.heading("producto", text="Producto / Cant.")
         self.cart_tree.heading("precio", text="Precio")
-        self.cart_tree.column("producto", width=220, anchor="w")
-        self.cart_tree.column("precio", width=95, anchor="e")
+        self.cart_tree.column("producto", width=225, anchor="w")
+        self.cart_tree.column("precio", width=105, anchor="e")
         self.cart_tree.pack(fill="both", expand=True)
-        self.make_button(right, "Eliminar seleccionado", self.remove_selected,
-                         bg="#eef1f4", fg="#333").pack(anchor="e", padx=12, pady=7, ipady=5)
+
         self.total_label = tk.Label(right, text="TOTAL  $0", bg="white", fg="#17191d",
-                                    font=("Segoe UI", 22, "bold"))
-        self.total_label.pack(anchor="w", padx=16, pady=5)
+                                    font=("Segoe UI", 18, "bold"), anchor="e")
+        self.total_label.pack(fill="x", padx=14, pady=(7, 5))
+
         tk.Label(right, text="DINERO RECIBIDO", bg="white", fg=self.MUTED,
-                 font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=16)
+                 font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=14, pady=(3, 0))
         self.received_label = tk.Label(right, text="$0", bg="white", fg="#17191d",
-                                       font=("Segoe UI", 18, "bold"))
-        self.received_label.pack(anchor="w", padx=16)
+                                       font=("Segoe UI", 17, "bold"))
+        self.received_label.pack(anchor="w", padx=14)
         self.change_label = tk.Label(right, text="CAMBIO  $0", bg="white", fg=self.GREEN,
-                                     font=("Segoe UI", 18, "bold"))
-        self.change_label.pack(anchor="w", padx=16, pady=6)
+                                     font=("Segoe UI", 17, "bold"))
+        self.change_label.pack(anchor="w", padx=14, pady=(2, 4))
         self.make_button(right, "Borrar dinero recibido", lambda: self.set_received(0),
-                         bg="white", fg="#667085").pack(anchor="w", padx=12, pady=2)
+                         bg="#68717a", fg="white", activebackground="#4f575e", font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=10, pady=0)
         self.make_button(right, "✓  REGISTRAR VENTA", self.save_sale,
-                         bg=self.GREEN, fg="white", activebackground="#208b54",
-                         font=("Segoe UI", 12, "bold")).pack(fill="x", padx=16, pady=9, ipady=10)
+                         bg=self.GREEN, fg="white", activebackground="#128657",
+                         font=("Segoe UI", 14, "bold")).pack(fill="x", padx=14, pady=(7, 5), ipady=14)
         self.make_button(right, "Cancelar / nueva venta", self.new_sale,
-                         bg="#eef1f4", fg="#333").pack(fill="x", padx=16, pady=(0, 14), ipady=7)
+                         bg="#68717a", fg="white", activebackground="#4f575e", font=("Segoe UI", 9, "bold")).pack(fill="x", padx=14, pady=(0, 8), ipady=6)
 
         self.load_categories()
+        self.update_idletasks()
         self.render_products()
         self.refresh_cart()
 
@@ -414,7 +467,7 @@ class App(tk.Tk):
         if not rows:
             msg = f'No encontramos "{query}".' if query else "Aún no hay productos."
             box = tk.Frame(self.products_area, bg="white")
-            box.pack(anchor="center", pady=60)
+            box.pack(anchor="center", pady=50)
             tk.Label(box, text=msg, bg="white", fg="#343a40", font=("Segoe UI", 14, "bold")).pack(pady=5)
             self.make_button(box, "＋ Agregar producto", self.add_product,
                              bg="#fff1d2", fg="#76500c").pack(pady=12, ipady=7, ipadx=10)
@@ -422,29 +475,40 @@ class App(tk.Tk):
         if query and suggestions and not any(normalize(query) in normalize(r[1]) for r in rows):
             suggestion = suggestions[0]
             tk.Label(self.products_area, text=f"Intentaste buscar '{query}'. ¿Quizás quisiste decir '{suggestion}'?",
-                     bg="white", fg="#667085", font=("Segoe UI", 9, "italic")).grid(row=0, column=0, columnspan=4, sticky="w", padx=8, pady=(2, 7))
-            start = 1
+                     bg="white", fg="#667085", font=("Segoe UI", 9, "italic")).grid(row=0, column=0, columnspan=4, sticky="w", padx=8, pady=(0, 4))
+            start_row = 1
         else:
-            start = 0
+            start_row = 0
+
+        # Tarjetas un poco más grandes, pero se adaptan al ancho disponible.
+        available = max(self.products_area.winfo_width(), 820)
+        columns = max(3, min(6, available // 145))
+        card_w, card_h = 138, 178
+        for col in range(columns):
+            self.products_area.grid_columnconfigure(col, weight=1, uniform="product")
         for i, (pid, name, category, price, image) in enumerate(rows):
-            card = tk.Frame(self.products_area, bg="#eef2f5", width=178, height=174,
-                            highlightthickness=1, highlightbackground="#e0e4e8", cursor="hand2")
-            card.grid(row=start + i // 4, column=i % 4, padx=8, pady=8, sticky="nsew")
+            r, col = start_row + i // columns, i % columns
+            card = tk.Frame(self.products_area, bg="#eef2f5", width=card_w, height=card_h,
+                            highlightthickness=1, highlightbackground="#dfe4e8", cursor="hand2")
+            card.grid(row=r, column=col, padx=7, pady=6, sticky="nsew")
             card.grid_propagate(False)
-            photo = self.load_photo(image, 136, 88, f"product-{pid}")
+            photo = self.load_photo(image, 120, 100, f"product-{pid}")
             if photo:
                 visual = tk.Label(card, image=photo, bg="#eef2f5")
                 visual.image = photo
             else:
                 visual = tk.Label(card, text="🖼\nSin imagen", bg="#eef2f5", fg="#8a939d",
                                   font=("Segoe UI", 10))
-            visual.pack(pady=(7, 3))
-            tk.Label(card, text=name, bg="#eef2f5", fg="#20252b", font=("Segoe UI", 10, "bold"),
-                     wraplength=162).pack(pady=(0, 1))
-            tk.Label(card, text=money(price), bg="#eef2f5", fg="#17191d",
-                     font=("Segoe UI", 11, "bold")).pack()
-            for widget in (card, visual):
+            visual.pack(pady=(6, 3))
+            name_label = tk.Label(card, text=name, bg="#eef2f5", fg="#20252b", font=("Segoe UI", 9, "bold"),
+                                  wraplength=128)
+            name_label.pack(pady=(0, 1))
+            price_label = tk.Label(card, text=money(price), bg="#eef2f5", fg="#17191d",
+                                   font=("Segoe UI", 10, "bold"))
+            price_label.pack()
+            for widget in (card, visual, name_label, price_label):
                 widget.bind("<Button-1>", lambda _e, p=pid: self.add_to_cart(p))
+                widget.bind("<Button-3>", lambda _e, p=pid: self.product_context_menu(_e, p))
 
     def load_photo(self, relative, width, height, key):
         if not relative:
@@ -460,6 +524,31 @@ class App(tk.Tk):
             return photo
         except Exception:
             return None
+
+    def product_context_menu(self, event, pid):
+        menu = tk.Menu(self, tearoff=0)
+        menu.add_command(label="Eliminar producto", command=lambda: self.delete_product_from_sale_view(pid))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def delete_product_from_sale_view(self, pid):
+        c = database()
+        row = c.execute("SELECT nombre,imagen FROM productos WHERE id=?", (pid,)).fetchone()
+        c.close()
+        if not row:
+            return
+        if not messagebox.askyesno("Confirmar eliminación", f'¿Eliminar el producto "{row[0]}"?', parent=self):
+            return
+        c = database()
+        c.execute("DELETE FROM productos WHERE id=?", (pid,))
+        c.commit()
+        c.close()
+        safe_remove_image(row[1])
+        self.cart.pop(pid, None)
+        self.render_products()
+        self.refresh_cart()
 
     def add_to_cart(self, pid):
         c = database()
@@ -493,94 +582,112 @@ class App(tk.Tk):
             return
         for item in self.cart_tree.get_children():
             self.cart_tree.delete(item)
-        total = 0
+        subtotal = 0
         for pid, (name, price, quantity) in self.cart.items():
-            subtotal = price * quantity
-            total += subtotal
-            self.cart_tree.insert("", "end", iid=str(pid), values=(f"{name}  ×{quantity}", money(subtotal)), tags=(str(pid),))
-        self.total_label.config(text=f"TOTAL  {money(total)}")
+            line_total = price * quantity
+            subtotal += line_total
+            self.cart_tree.insert("", "end", iid=str(pid), values=(f"{name}  ×{quantity}", money(line_total)), tags=(str(pid),))
+
+        total = self.effective_total()
+        self.final_total = total
+        if self.discount_enabled:
+            descuento = subtotal - total
+            self.total_label.config(text=f"TOTAL  {money(total)}   (-{money(descuento)})")
+        else:
+            self.total_label.config(text=f"TOTAL  {money(total)}")
         self.update_payment_display()
 
     def render_cash_buttons(self):
         for w in self.cash_buttons_frame.winfo_children():
             w.destroy()
-        for index, denomination in enumerate(DENOMINATIONS):
+
+        # Cada billete conserva su propio ancho. No usamos columnas con weight=1,
+        # porque eso era lo que producía los grandes huecos de la captura.
+        for denomination in DENOMINATIONS:
             relative = self.money_paths.get(denomination, "")
             if not relative:
                 default = DEFAULT_MONEY / f"{denomination}.png"
                 if default.exists():
                     relative = str(default)
-            photo = self.load_photo(relative, 108, 40, f"money-{denomination}")
+            photo = self.load_photo(relative, 120, 62, f"money-{denomination}")
+            holder = tk.Frame(self.cash_buttons_frame, bg="#f8fafb", width=124, height=70)
+            holder.pack(side="left", padx=2, pady=1)
+            holder.pack_propagate(False)
             btn = self.make_button(
-                self.cash_buttons_frame,
+                holder,
                 money(denomination) if not photo else "",
                 lambda value=denomination: self.add_received(value),
                 bg="#edf1f4", fg="#252a31", activebackground="#e0e5e9",
                 font=("Segoe UI", 8, "bold")
             )
+            btn.pack(fill="both", expand=True)
             if photo:
                 btn.configure(image=photo, compound="center")
                 btn.image = photo
-            btn.grid(row=0, column=index, sticky="ew", padx=2, pady=2, ipady=2)
-            self.cash_buttons_frame.grid_columnconfigure(index, weight=1)
 
     def add_received(self, amount):
         self.set_received(self.received + amount)
 
     def set_received(self, amount):
         self.received = max(0, int(amount))
-        self.custom_received_var.set(format_number(self.received))
+        self.custom_received_var.set(str(self.received))
         self.update_payment_display()
 
     def on_received_focus(self, _event=None):
-        # Facilita reemplazar el 0 inicial escribiendo o pegando un nuevo valor.
         if self.custom_received_entry.get() == "0":
             self.custom_received_entry.selection_range(0, tk.END)
 
-    def _format_entry_preserve_cursor(self):
-        """Format a money entry without making digits jump while typing/pasting."""
-        entry = self.custom_received_entry
-        raw = entry.get()
-        try:
-            cursor = entry.index(tk.INSERT)
-        except tk.TclError:
-            cursor = len(raw)
-        digits_before = sum(ch.isdigit() for ch in raw[:cursor])
-        value = parse_money(raw)
-        formatted = format_number(value)
-        if raw != formatted:
-            entry.delete(0, tk.END)
-            entry.insert(0, formatted)
-            # Put the cursor after the same number of numeric digits as before.
-            seen = 0
-            new_cursor = len(formatted)
-            for i, ch in enumerate(formatted):
-                if ch.isdigit():
-                    seen += 1
-                    if seen == digits_before:
-                        new_cursor = i + 1
-                        break
-            if digits_before == 0:
-                new_cursor = 0
-            entry.icursor(new_cursor)
+    def on_received_typed(self, _event=None):
+        # El campo ya no reformatea con puntos mientras se escribe.
+        # Esto evita que Tk mueva el cursor y cambie 175000 por 170050, etc.
+        text = self.custom_received_entry.get()
+        value = parse_money(text)
         self.received = value
         self.update_payment_display()
 
-    def on_received_typed(self, _event=None):
-        self._format_entry_preserve_cursor()
-
     def on_received_paste(self, _event=None):
-        self.after_idle(self._format_entry_preserve_cursor)
+        self.after_idle(self.on_received_typed)
 
-    def use_custom_received(self):
-        self.received = parse_money(self.custom_received_var.get())
-        self.custom_received_var.set(format_number(self.received))
+    def cart_subtotal(self):
+        return sum(price * quantity for _, price, quantity in self.cart.values())
+
+    def effective_total(self):
+        subtotal = self.cart_subtotal()
+        if not self.discount_enabled:
+            return subtotal
+        final_value = parse_money(self.final_price_var.get()) if hasattr(self, "final_price_var") else subtotal
+        if final_value < 0:
+            final_value = 0
+        if final_value > subtotal:
+            final_value = subtotal
+        return final_value
+
+    def toggle_discount(self):
+        self.discount_enabled = bool(self.discount_var.get())
+        if self.discount_enabled:
+            subtotal = self.cart_subtotal()
+            self.final_price_var.set(str(subtotal))
+            self.final_price_frame.pack(fill="x", padx=10, pady=(0, 6))
+            self.final_price_entry.focus_set()
+            self.final_price_entry.selection_range(0, tk.END)
+        else:
+            self.final_price_frame.pack_forget()
+            self.final_total = self.cart_subtotal()
+        self.refresh_cart()
+
+    def on_final_price_typed(self, _event=None):
+        subtotal = self.cart_subtotal()
+        value = parse_money(self.final_price_var.get())
+        if value > subtotal:
+            value = subtotal
+            self.final_price_var.set(str(value))
+        self.final_total = value
         self.update_payment_display()
 
     def update_payment_display(self):
         if not hasattr(self, "received_label"):
             return
-        total = sum(price * quantity for _, price, quantity in self.cart.values())
+        total = self.effective_total()
         difference = self.received - total
         self.received_label.config(text=money(self.received))
         if difference >= 0:
@@ -592,30 +699,52 @@ class App(tk.Tk):
         if not self.cart:
             messagebox.showwarning("Venta", "Agrega al menos un producto.")
             return
-        total = sum(price * quantity for _, price, quantity in self.cart.values())
+        subtotal = self.cart_subtotal()
+        total = self.effective_total()
+        descuento = subtotal - total
         if self.received < total:
             messagebox.showwarning("Pago insuficiente", "El dinero recibido no alcanza para cubrir el total.")
             return
         now = datetime.now().replace(microsecond=0)
         c = database()
         cur = c.cursor()
-        cur.execute("INSERT INTO ventas(fecha,total,recibido,cambio) VALUES(?,?,?,?)",
-                    (now.isoformat(sep=" "), total, self.received, self.received - total))
+        cur.execute("INSERT INTO ventas(fecha,total,recibido,cambio,descuento) VALUES(?,?,?,?,?)",
+                    (now.isoformat(sep=" "), total, self.received, self.received - total, descuento))
         sale_id = cur.lastrowid
+        # Guardar el precio final realmente cobrado por cada producto.
+        # Si hay descuento, todo el descuento se aplica al último producto.
+        items = list(self.cart.values())
+        rows = []
+        for index, (name, price, quantity) in enumerate(items):
+            precio_final = price
+            if index == len(items) - 1 and descuento > 0:
+                total_anterior = sum(p * q for name2, p, q in items[:index])
+                total_ultimo = max(0, total - total_anterior)
+                precio_final = total_ultimo // quantity if quantity else 0
+            rows.append((sale_id, name, quantity, precio_final))
         cur.executemany(
             "INSERT INTO detalle(venta_id,nombre,cantidad,precio) VALUES(?,?,?,?)",
-            [(sale_id, name, quantity, price) for name, price, quantity in self.cart.values()]
+            rows
         )
         c.commit()
         c.close()
-        messagebox.showinfo("Venta registrada", f"Venta #{sale_id}\nTotal: {money(total)}\nRecibido: {money(self.received)}\nCambio: {money(self.received - total)}")
+        descuento_texto = f"\nDescuento: {money(descuento)}" if descuento else ""
+        messagebox.showinfo("Venta registrada", f"Venta #{sale_id}\nTotal: {money(total)}{descuento_texto}\nRecibido: {money(self.received)}\nCambio: {money(self.received - total)}")
         self.new_sale()
 
     def new_sale(self):
         self.cart.clear()
         self.received = 0
+        self.discount_enabled = False
+        self.final_total = 0
         if hasattr(self, "custom_received_var"):
             self.custom_received_var.set("0")
+        if hasattr(self, "discount_var"):
+            self.discount_var.set(False)
+        if hasattr(self, "final_price_var"):
+            self.final_price_var.set("0")
+        if hasattr(self, "final_price_frame"):
+            self.final_price_frame.pack_forget()
         self.refresh_cart()
 
     # --------------------------- History -----------------------------------
@@ -628,10 +757,22 @@ class App(tk.Tk):
             return today - timedelta(days=today.weekday())
         return today.replace(day=1)
 
+    def period_end(self, period):
+        now = datetime.now()
+        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        if period == "Hoy":
+            return today + timedelta(days=1)
+        if period == "Semana":
+            return today - timedelta(days=today.weekday()) + timedelta(days=7)
+        if today.month == 12:
+            return today.replace(year=today.year + 1, month=1, day=1)
+        return today.replace(month=today.month + 1, day=1)
+
     def show_history(self, period="Hoy"):
         self.current_view = "history"
         self.clear_body()
         start = self.period_start(period)
+        end = self.period_end(period)
         if period == "Hoy":
             title = "Ventas de hoy"
         elif period == "Semana":
@@ -639,8 +780,10 @@ class App(tk.Tk):
         else:
             title = "Ventas de este mes"
         c = database()
-        total, count = c.execute("SELECT COALESCE(SUM(total),0),COUNT(*) FROM ventas WHERE fecha >= ?", (start.isoformat(sep=" "),)).fetchone()
-        rows = c.execute("SELECT id,fecha,total,recibido,cambio FROM ventas WHERE fecha >= ? ORDER BY id DESC", (start.isoformat(sep=" "),)).fetchall()
+        total, count = c.execute("SELECT COALESCE(SUM(total),0),COUNT(*) FROM ventas WHERE fecha >= ? AND fecha < ?",
+                                 (start.isoformat(sep=" "), end.isoformat(sep=" "))).fetchone()
+        rows = c.execute("SELECT id,fecha,total,recibido,cambio FROM ventas WHERE fecha >= ? AND fecha < ? ORDER BY id DESC",
+                         (start.isoformat(sep=" "), end.isoformat(sep=" "))).fetchall()
         c.close()
 
         head = tk.Frame(self.body, bg="white")
@@ -656,19 +799,38 @@ class App(tk.Tk):
 
         frame = tk.Frame(self.body, bg="white")
         frame.pack(fill="both", expand=True)
-        tree = ttk.Treeview(frame, columns=("id", "fecha", "total", "rec", "cam"), show="headings")
-        for col, text, width in [("id", "Venta", 90), ("fecha", "Fecha y hora", 210), ("total", "Total", 170), ("rec", "Recibido", 170), ("cam", "Cambio", 170)]:
+
+        # Historial simplificado: únicamente fecha, producto y precio.
+        detail_rows = []
+        c = database()
+        detail_rows = c.execute(
+            """SELECT v.fecha, d.nombre, d.precio * d.cantidad
+               FROM ventas v
+               JOIN detalle d ON d.venta_id = v.id
+               WHERE v.fecha >= ? AND v.fecha < ?
+               ORDER BY v.id DESC, d.id ASC""",
+            (start.isoformat(sep=" "), end.isoformat(sep=" "))
+        ).fetchall()
+        c.close()
+
+        tree = ttk.Treeview(frame, columns=("fecha", "producto", "precio"), show="headings")
+        for col, text, width in [
+            ("fecha", "Fecha", 210),
+            ("producto", "Producto", 520),
+            ("precio", "Precio", 180)
+        ]:
             tree.heading(col, text=text)
-            tree.column(col, width=width, anchor="center")
+            tree.column(col, width=width, anchor="center" if col != "producto" else "w")
         tree.pack(fill="both", expand=True, padx=12, pady=12)
-        for sale_id, date_text, sale_total, received, change in rows:
+
+        for date_text, product_name, line_price in detail_rows:
             try:
                 date_display = datetime.fromisoformat(date_text).strftime("%d/%m/%Y %H:%M")
             except ValueError:
                 date_display = date_text
-            tree.insert("", "end", values=(sale_id, date_display, money(sale_total), money(received), money(change)), tags=(str(sale_id),))
-        tree.bind("<Double-1>", lambda _e: self.show_sale_detail(tree))
-        tk.Label(self.body, text="Doble clic en una venta para ver sus productos.", bg=self.BG, fg=self.MUTED,
+            tree.insert("", "end", values=(date_display, product_name, money(line_price)))
+
+        tk.Label(self.body, text="Fecha, producto y precio.", bg=self.BG, fg=self.MUTED,
                  font=("Segoe UI", 9)).pack(anchor="w", pady=(7, 0))
 
     def show_sale_detail(self, tree):
@@ -712,7 +874,8 @@ class App(tk.Tk):
     def add_product(self):
         w = tk.Toplevel(self)
         w.title("Agregar producto")
-        w.geometry("600x650")
+        w.geometry("720x790")
+        w.resizable(True, True)
         w.transient(self)
         w.grab_set()
         w.configure(bg="white")
@@ -726,7 +889,8 @@ class App(tk.Tk):
         price_var = tk.StringVar(value="0")
         price_entry = tk.Entry(form, textvariable=price_var, font=("Segoe UI", 12), relief="solid", bd=1, justify="right")
         price_entry.pack(fill="x", pady=(3, 12), ipady=6)
-        price_entry.bind("<KeyRelease>", lambda _e: self.format_entry_var(price_var))
+        # El precio se deja escribir/pegar sin insertar puntos automáticamente.
+        # Al guardar se convierte a número entero.
         c = database()
         categories = [r[0] for r in c.execute("SELECT nombre FROM categorias ORDER BY nombre COLLATE NOCASE")]
         c.close()
@@ -735,8 +899,13 @@ class App(tk.Tk):
         combo = ttk.Combobox(form, textvariable=category_var, values=categories, state="readonly" if categories else "disabled")
         combo.pack(fill="x", pady=(3, 12), ipady=4)
         image_holder = {"path": "", "relative": ""}
-        preview = tk.Label(w, text="Sin imagen seleccionada", bg="#f0f2f4", fg="#7a828a", width=38, height=10)
-        preview.pack(padx=30, pady=8)
+        preview_frame = tk.Frame(w, bg="#f0f2f4", width=620, height=300,
+                                 highlightthickness=1, highlightbackground="#dfe3e8")
+        preview_frame.pack(fill="both", expand=True, padx=30, pady=8)
+        preview_frame.pack_propagate(False)
+        preview = tk.Label(preview_frame, text="Sin imagen seleccionada", bg="#f0f2f4", fg="#7a828a",
+                           font=("Segoe UI", 10), anchor="center", justify="center")
+        preview.pack(fill="both", expand=True)
 
         def choose_image():
             path = filedialog.askopenfilename(parent=w, filetypes=[("Imágenes", "*.jpg *.jpeg *.png *.gif *.bmp *.webp")])
@@ -745,7 +914,7 @@ class App(tk.Tk):
             image_holder["path"] = path
             try:
                 im = Image.open(path).convert("RGB")
-                im.thumbnail((300, 170), Image.Resampling.LANCZOS)
+                im.thumbnail((590, 285), Image.Resampling.LANCZOS)
                 ph = ImageTk.PhotoImage(im)
                 preview.configure(image=ph, text="")
                 preview.image = ph
@@ -782,10 +951,6 @@ class App(tk.Tk):
         self.make_button(w, "GUARDAR PRODUCTO", save, bg=self.GREEN, fg="white",
                          font=("Segoe UI", 11, "bold")).pack(fill="x", padx=30, pady=18, ipady=9)
         name_entry.focus_set()
-
-    def format_entry_var(self, var):
-        value = parse_money(var.get())
-        var.set(format_number(value))
 
     def add_category(self):
         w = tk.Toplevel(self)
@@ -878,40 +1043,44 @@ class App(tk.Tk):
         self.current_view = "settings"
         self.clear_body()
         tk.Label(self.body, text="Configuración", bg=self.BG, fg="#17191d",
-                 font=("Segoe UI", 21, "bold")).pack(anchor="w", pady=(5, 12))
+                 font=("Segoe UI", 21, "bold")).pack(anchor="w", pady=(2, 8))
         card = tk.Frame(self.body, bg="white")
-        card.pack(fill="x", pady=(0, 10))
-        tk.Label(card, text="Nombre del negocio", bg="white", fg="#333", font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=20, pady=(18, 5))
+        card.pack(fill="x", pady=(0, 8))
+        tk.Label(card, text="Nombre del negocio", bg="white", fg="#333", font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=18, pady=(12, 4))
         business_var = tk.StringVar(value=self.config_data.get("negocio", "MI NEGOCIO"))
-        business_entry = tk.Entry(card, textvariable=business_var, font=("Segoe UI", 13), relief="solid", bd=1)
-        business_entry.pack(fill="x", padx=20, ipady=7)
+        business_entry = tk.Entry(card, textvariable=business_var, font=("Segoe UI", 12), relief="solid", bd=1)
+        business_entry.pack(fill="x", padx=18, ipady=6)
         self.make_button(card, "Guardar nombre", lambda: self.save_business_name(business_var.get()),
-                         bg=self.GREEN, fg="white").pack(anchor="w", padx=20, pady=14, ipady=7, ipadx=10)
+                         bg=self.GREEN, fg="white").pack(anchor="w", padx=18, pady=10, ipady=6, ipadx=10)
 
         tk.Label(self.body, text="Imágenes de billetes / monedas", bg=self.BG, fg="#17191d",
-                 font=("Segoe UI", 15, "bold")).pack(anchor="w", pady=(8, 5))
-        tk.Label(self.body, text="Selecciona tus propias imágenes. Se copian a datos/dinero y permanecen después de reiniciar.",
-                 bg=self.BG, fg=self.MUTED, font=("Segoe UI", 9)).pack(anchor="w", pady=(0, 7))
-        money_frame = tk.Frame(self.body, bg="white")
-        money_frame.pack(fill="both", expand=True)
-        for d in DENOMINATIONS:
-            row = tk.Frame(money_frame, bg="white")
-            row.pack(fill="x", padx=16, pady=5)
-            tk.Label(row, text=money(d), bg="white", fg="#252a31", width=12,
-                     font=("Segoe UI", 10, "bold"), anchor="w").pack(side="left")
-            preview = tk.Label(row, text="Sin imagen personalizada", bg="#f0f2f4", fg="#7a828a", width=20, height=3)
-            preview.pack(side="left", padx=8)
+                 font=("Segoe UI", 15, "bold")).pack(anchor="w", pady=(4, 3))
+        tk.Label(self.body, text="Cambia las imágenes aquí. Se guardan en datos/dinero y permanecen después de reiniciar.",
+                 bg=self.BG, fg=self.MUTED, font=("Segoe UI", 9)).pack(anchor="w", pady=(0, 6))
+
+        # Las siete denominaciones se muestran en una cuadrícula compacta.
+        # $100.000 siempre tiene su propio botón y no queda oculto.
+        money_frame = tk.Frame(self.body, bg=self.BG)
+        money_frame.pack(fill="both", expand=True, padx=2)
+        for col in range(4):
+            money_frame.grid_columnconfigure(col, weight=1, uniform="money")
+        for i, d in enumerate(DENOMINATIONS):
+            row, col = divmod(i, 4)
+            card = tk.Frame(money_frame, bg="white", highlightthickness=1, highlightbackground="#e0e4e8")
+            card.grid(row=row, column=col, sticky="nsew", padx=4, pady=4)
+            tk.Label(card, text=money(d), bg="white", fg="#252a31",
+                     font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10, pady=(8, 3))
+            preview = tk.Label(card, text="Sin imagen personalizada", bg="#f0f2f4", fg="#7a828a",
+                               width=20, height=3, anchor="center")
+            preview.pack(fill="x", padx=8, pady=(0, 6))
             rel = self.money_paths.get(d, "")
             if rel:
-                ph = self.load_photo(rel, 115, 42, f"settings-{d}")
+                ph = self.load_photo(rel, 210, 68, f"settings-{d}")
                 if ph:
                     preview.config(image=ph, text="")
                     preview.image = ph
-            status = tk.Label(row, text=Path(rel).name if rel else "Usando imagen predeterminada", bg="white", fg=self.MUTED,
-                              anchor="w")
-            status.pack(side="left", fill="x", expand=True, padx=8)
-            self.make_button(row, "Cambiar imagen", lambda value=d: self.change_money_image(value),
-                             bg="#e9edf1", fg="#252a31").pack(side="right", ipady=5, ipadx=7)
+            self.make_button(card, "Cambiar imagen", lambda value=d: self.change_money_image(value),
+                             bg="#e9edf1", fg="#252a31").pack(fill="x", padx=8, pady=(0, 8), ipady=5)
 
     def save_business_name(self, name):
         name = name.strip() or "MI NEGOCIO"
@@ -930,7 +1099,9 @@ class App(tk.Tk):
             self.money_paths[denomination] = relative
             self.config_data["dinero"] = {str(k): v for k, v in self.money_paths.items()}
             save_config(self.config_data)
-            # La copia nueva es permanente; la anterior también se conserva para no romper referencias.
+            # La copia nueva es permanente y se muestra inmediatamente.
+            if old:
+                safe_remove_image(old)
             self.show_settings()
         except Exception as exc:
             messagebox.showerror("Imagen", f"No se pudo guardar la imagen.\n{exc}")
